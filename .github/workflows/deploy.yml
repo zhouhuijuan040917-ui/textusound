@@ -3,6 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -30,20 +31,38 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
         run: npm ci
+
+      - name: Test data model
+        run: npm test
 
       - name: Build
         run: npm run build
 
+      - name: Test production UI and storage under /textusound/
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: npm run test:browser
+
+      - name: Test persistence after browser restart
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: npm run test:restart
+
       - name: Configure Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
