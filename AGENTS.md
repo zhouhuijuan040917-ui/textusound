@@ -1,131 +1,44 @@
-# AGENTS.md
+# TOEFL Learning Studio contributor guidance
 
-Guidance for AI agents and human contributors working in this repository.
+This is a static, client-side Vite app deployed to GitHub Pages. Each cloud task already has an isolated checkout; use the existing checkout and do not create a worktree unless explicitly asked.
 
-## What this is
-
-Textusound is a **static, client-side** web app that converts pasted text to
-speech entirely in the browser using `kokoro-js` (Kokoro-82M) on top of
-Transformers.js. There is no backend. It is built with Vite (vanilla JS, no
-framework) and deploys to GitHub Pages.
-
-## Commands
+## Development and validation
 
 ```bash
-npm install      # install dependencies
-npm run dev      # dev server with HMR (http://localhost:5173 by convention)
-npm run build    # production build into dist/
-npm run preview  # serve the production build locally
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm ci
+npm run dev
+npm test
+npm run build
+CHROME_PATH=/usr/bin/chromium npm run test:browser
+CHROME_PATH=/usr/bin/chromium npm run test:restart
+RUN_TTS=1 CHROME_PATH=/usr/bin/chromium npm run test:browser
 ```
 
-There is no unit-test framework or linter configured. Validate changes by
-running `npm run build` and exercising the app in a real browser (or a headless
-Chrome script via `playwright-core`, channel `chrome`). Always test the actual
-served build, not just source.
+Do not equate a build with working speech. Test the actual production build, IndexedDB round trips, backup with audio and real inference when touching the TTS path. The default browser suite does not run model inference; report that separately. Chrome/Edge native save pickers and audible quality need human checks. Keep TLS and package integrity verification enabled. CUDA is unnecessary for the browser workflow; the official ONNX install skip flag avoids a redundant Node GPU download.
 
-## Layout
+## Active architecture
 
-| Path | Responsibility |
-| --- | --- |
-| `index.html` | Markup, fonts, favicon, and the **Content-Security-Policy** meta. |
-| `src/main.js` | UI orchestration: state machine, worker wiring, waveform rendering, playback, paste/manual text tidying, and the save flow. |
-| `src/tts.worker.js` | All inference. Loads the model, chunks text, generates per chunk, builds the WAV. |
-| `src/audio.js` | Pure helpers: `tidyText`/`tidyReport` (clean pasted text), `concatFloat32`, `silence`, `computePeaks`, `floatToWav`. Imported by the worker and `main.js`. |
-| `src/chunk.js` | Text → chunks for generation: splits on blank-line paragraph breaks first (each paragraph/heading becomes its own group), then kokoro `TextSplitterStream` per paragraph + a word-boundary safety cap below the model's token limit. Returns `[{ text, paragraphBreakBefore }]`. Imported by the worker only (keeps kokoro-js out of the main-thread bundle). |
-| `src/save.js` | File System Access API save + MRU directory persistence, with a download fallback. |
-| `src/storage.js` | IndexedDB (handle persistence) and `localStorage` (prefs). |
-| `src/voices.js` | The 28-voice list used to build the picker. |
-| `src/styles.css` | All styling. |
-| `.github/workflows/deploy.yml` | Build + deploy to GitHub Pages on push to `main`. |
+- `index.html`: CSP, static shell, accessible dialogs/progress, new app entry.
+- `src/studio.js`: four libraries, material editor, vocabulary/source capture, review, audio views, settings, hash routing. All user text must be escaped before HTML insertion.
+- `src/studio-db.js`: IndexedDB stores (`materials`, `vocabulary`, `audio`, `settings`), stable content block IDs, source relations, deduplication, hashes and atomic validated backup restore.
+- `src/studio-tts.js`: one active inference job, monotonic IDs and cancellation; wraps the original module Worker.
+- `src/studio.css`, `src/studio-layout.css`: responsive reading-oriented UI. System fonts avoid external font dependencies.
+- `src/tts.worker.js`, `src/chunk.js`, `src/audio.js`, `src/voices.js`: existing Kokoro inference and audio helpers, shared by every subject.
+- `src/save.js`, `src/storage.js`: existing native file picker, directory handle persistence and download fallback. Their old `textusound` DB is independent of the learning library.
+- `src/main.js` and `src/styles.css`: retained legacy Textusound UI, not the current entry point.
+- `tests/data.test.js`, `tests/browser.cjs`, `tests/restart.cjs`: model integrity tests and served production browser checks.
 
-## Architecture
+## Invariants
 
-Inference runs in a **module Web Worker** so the UI stays responsive. The main
-thread owns all UI state; the worker owns the model.
+1. Preserve the original worker protocol. Job IDs gate results, generation is serialized with a trailing queue catch, and cancellation cannot publish stale output.
+2. Paragraph breaks survive chunking. `chunkText` returns `{ text, paragraphBreakBefore }`; the worker inserts longer paragraph pauses. Never flatten all whitespace before chunking.
+3. Materials and content block IDs remain stable during edits. Speaking always contains four ordered questions. Answers have their own IDs and types.
+4. Audio records hold actual Blob bytes, text, content SHA-256, owner/block identity, voice, speed and timestamp. Cache reuse requires text hash and settings. Old audio is retained with a warning when its source text changes. Original uploads are explicitly distinct from generated TTS.
+5. Vocabulary is deduplicated by normalized term and collection. Sources can have multiple examples. Removing a material/answer unlinks only its sources; unrelated vocabulary survives. Remove orphaned owned audio in the same transaction.
+6. Only report saving after transaction commit. Backup import validates schema and references before replacing stores in a single transaction. Never partially clear a library on a bad backup.
+7. Native save picker must be invoked directly in the user click before awaiting anything else. Preserve download fallback and do not discard saved audio when permission is denied or the picker is cancelled.
+8. Revoke object URLs when discarding/replacing views or audio. Do not persist blob URLs or local file paths as audio.
+9. All app asset paths stay relative (`base: "./"`). Use hash navigation for GitHub Pages subpath support. CSP must include every external model/runtime origin; do not weaken it globally.
+10. No backend, paid API, hidden external text upload or invented translations/IPA. Local browser storage is not cloud backup. Keep backup/export and capacity guidance visible.
 
-### Worker message protocol
-
-Main → worker:
-- `{ type: "generate", jobId, text, voice, speed }`
-- `{ type: "cancel" }` — cooperative; the worker stops at the next chunk boundary
-
-Worker → main:
-- `{ type: "backend", backend, stage }` — `stage` is `loading` | `ready` | `fallback`
-- `{ type: "progress", phase: "load", progress, loaded, total }` — **no jobId**
-- `{ type: "progress", jobId, phase: "generate", done, total }`
-- `{ type: "done", jobId, wav, peaks, sampleRate, duration, backend }` — `wav` (ArrayBuffer) and `peaks` (Float32Array) are **transferred**
-- `{ type: "cancelled", jobId }`
-- `{ type: "error", jobId, message }`
-
-### Chunking & pauses
-
-Kokoro speaks each generated chunk as **one continuous breath**; the only pauses
-in the output are the `silence(...)` segments the worker splices *between* chunks.
-There is no in-text "pause" token — separation comes entirely from where the text
-is split. This mirrors kokoro's own design: its `TextSplitterStream` treats `\n`
-as a sentence terminator, and the reference Python pipeline splits input on `\n+`.
-
-So `chunkText` keeps paragraph structure instead of collapsing all whitespace:
-blank lines split paragraphs (and standalone lines such as headings) into separate
-chunks, while lone newlines inside a paragraph are flattened to spaces so
-hard-wrapped prose (e.g. PDF copies) isn't chopped mid-sentence. The worker then
-renders a longer pause (`PARAGRAPH_SILENCE`) at paragraph boundaries than between
-sentences (`INTER_CHUNK_SILENCE`), keyed off each chunk's `paragraphBreakBefore`.
-Collapsing newlines before chunking glues a heading onto the next paragraph's
-first sentence — that was the original run-on bug.
-
-## Invariants — do not break these
-
-1. **Job ids gate everything.** `state.jobId` in `main.js` is monotonic. Any
-   worker message whose `jobId` differs from the current `state.jobId` is
-   ignored. Bump the id whenever generated audio becomes obsolete.
-2. **`invalidateToIdle()` is the only way to discard ready audio.** It bumps the
-   job id, resets the player, and returns to idle. Call it on text edits, voice
-   changes, and speaking-rate changes while in the `ready` state.
-3. **The save picker must run before any `await`.** `showSaveFilePicker()`
-   requires transient user activation, so in `onSave()` it is called first
-   (the MRU handle is preloaded at startup via `primeMru()`), and the WAV blob is
-   built synchronously. Never add an `await` before the picker on the click path.
-4. **Generation is serialized in the worker.** `state.genChain` chains
-   `handleGenerate` calls so `tts.generate()` never overlaps; `state.currentJobId`
-   is set synchronously on each `generate` message so superseded jobs bail at the
-   next chunk. Keep the trailing `.catch` so an unexpected throw can't poison the
-   queue.
-5. **The CSP must list every external origin.** If you add a dependency or asset
-   that fetches from a new host (script, worker, `connect`, font, media, image),
-   update the `<meta http-equiv="Content-Security-Policy">` in `index.html` and
-   verify in a real browser that nothing is blocked.
-6. **Asset paths stay relative.** `vite.config.js` uses `base: "./"` and the
-   worker/WASM are referenced via `new URL(..., import.meta.url)` so the app
-   works under the GitHub Pages project subpath. Don't hardcode absolute paths.
-7. **Revoke object URLs** when replacing or discarding audio (`resetAudio`).
-8. **Paragraph breaks must survive to the worker.** `chunkText` returns
-   `[{ text, paragraphBreakBefore }]` and must keep blank-line boundaries intact
-   (never collapse all whitespace), or headings and paragraphs run together in the
-   audio. The worker reads `chunk.text` and uses `paragraphBreakBefore` to choose
-   the inter-chunk silence — keep that object shape in sync across both files.
-
-## Conventions
-
-- Vanilla ES modules, 2-space indent, double-quoted strings. No framework.
-- Comment only non-obvious logic; let clear code speak for itself.
-- Palette lives in CSS custom properties in `:root`. For historical reasons the
-  token names are kept even though values changed: `--amber` holds gold and
-  `--signal` holds the green. `main.js` reads `--wave-dim`, `--signal`, and
-  `--paper` when drawing the waveform — keep those names in sync if you rename.
-- User-facing strings should avoid date-bound phrasing.
-
-## Deployment
-
-`.github/workflows/deploy.yml` builds and publishes to GitHub Pages on every push
-to `main`. One-time repo setup: **Settings → Pages → Source: GitHub Actions**.
-The shipped `dist/` includes the ONNX Runtime WASM (~21 MB) as a same-origin
-asset; the model weights are fetched from Hugging Face at runtime and cached.
-
-## Licensing
-
-The app code is dedicated to the public domain under **CC0-1.0** (see `LICENSE`).
-When adding dependencies, prefer permissive licenses (MIT/BSD/Apache/OFL) and
-avoid copyleft (GPL/LGPL). The project deliberately ships no copyleft code — for
-example, MP3 export was dropped rather than bundle the LGPL-3.0 LAME encoder.
-Keep it that way unless a maintainer signs off.
+Keep vanilla ES modules, two-space indentation and plain user-facing language. Prefer permissive third-party licenses (MIT/BSD/Apache); app code is CC0. Changes to dependency licensing should be reviewed.

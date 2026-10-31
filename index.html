@@ -1,193 +1,54 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob:; child-src 'self' blob:; media-src 'self' blob:; connect-src 'self' blob: data: https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob:; child-src 'self' blob:; media-src 'self' blob:; connect-src 'self' blob: data: https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Textusound — local text to speech</title>
+    <meta name="theme-color" content="#102c49" />
     <meta
       name="description"
-      content="Turn pasted text into spoken audio, generated locally in your browser. Your text and the audio never leave your machine; only the speech model and fonts are downloaded once from public CDNs."
+      content="A personal TOEFL learning workspace: reading, listening, writing, speaking, vocabulary and review. Local browser storage and private Kokoro speech generation."
     />
+    <title>TOEFL Learning Studio</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23160a1c'/%3E%3Cg fill='%23a8db44'%3E%3Crect x='7' y='13' width='3.5' height='6' rx='1.5'/%3E%3Crect x='14.25' y='8' width='3.5' height='16' rx='1.75'/%3E%3Crect x='21.5' y='11' width='3.5' height='10' rx='1.75'/%3E%3C/g%3E%3C/svg%3E"
-    />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23102c49'/%3E%3Ctext x='8' y='24' font-size='24' font-family='serif' fill='%237bd9d0'%3ET%3C/text%3E%3C/svg%3E"
     />
   </head>
   <body>
-    <div class="grain" aria-hidden="true"></div>
-
-    <div class="console">
-      <header class="masthead">
-        <div class="brand">
-          <span class="rec-dot" aria-hidden="true"></span>
-          <h1>Textu<span>sound</span></h1>
-          <p class="tagline">on&#8209;air text&#8209;to&#8209;speech · runs on your machine</p>
-        </div>
-        <div class="meters">
-          <span class="chip" id="backend-chip" title="Compute backend">
-            <span class="chip-key">ENGINE</span>
-            <span class="chip-val" id="backend-val">—</span>
-          </span>
-          <span class="chip private" title="Your text and the generated audio never leave your browser">
-            <span class="chip-key">PRIVACY</span>
-            <span class="chip-val">LOCAL</span>
-          </span>
-        </div>
-      </header>
-
-      <main class="deck">
-        <section class="script-bay">
-          <label class="bay-label" for="text">SCRIPT</label>
-          <textarea
-            id="text"
-            placeholder="Paste or type the words you want spoken aloud…"
-            spellcheck="true"
-          ></textarea>
-          <div class="bay-foot">
-            <span id="char-count" class="char-count">0 characters</span>
-            <span class="hint">First run downloads the voice model, then it's cached.</span>
-            <button
-              id="tidy"
-              class="tidy-btn"
-              type="button"
-              disabled
-              title="Tidy the script: join wrapped lines, mend words split across lines, and drop stray spacing. Pasted text is tidied automatically."
-            >
-              <span class="tidy-glyph" aria-hidden="true">&#10022;</span>
-              <span id="tidy-label">Tidy</span>
-            </button>
-          </div>
-          <div id="tidy-notice" class="tidy-notice" hidden aria-live="polite">
-            <span class="tidy-notice-dot" aria-hidden="true"></span>
-            <span id="tidy-notice-msg" class="tidy-notice-msg"></span>
-            <button id="tidy-undo" class="tidy-undo" type="button">Undo</button>
-          </div>
-        </section>
-
-        <section class="settings">
-          <div class="field">
-            <span class="field-label" id="voice-label">VOICE</span>
-            <div class="voice-picker" id="voice-picker">
-              <div
-                id="voice-button"
-                class="vp-trigger"
-                role="combobox"
-                tabindex="0"
-                aria-haspopup="listbox"
-                aria-expanded="false"
-                aria-controls="voice-listbox"
-                aria-labelledby="voice-label voice-button"
-              >
-                <span class="vp-current">
-                  <span class="vp-name" id="voice-current-name"></span>
-                  <span class="grade vp-grade" id="voice-current-grade"></span>
-                </span>
-                <span class="vp-caret" aria-hidden="true">▾</span>
-              </div>
-              <div class="vp-pop" id="voice-pop" hidden>
-                <div class="vp-head" aria-hidden="true">
-                  <span class="vp-key">
-                    <span class="grade gA">A</span>
-                    <span class="grade gB">B</span>
-                    <span class="grade gC">C</span>
-                    <span class="grade gD">D</span>
-                    <span class="grade gF">F</span>
-                  </span>
-                  <span class="vp-key-label">training-data quality</span>
-                </div>
-                <div
-                  id="voice-listbox"
-                  class="vp-list"
-                  role="listbox"
-                  aria-label="Voice"
-                ></div>
-                <p class="vp-foot">
-                  The A&nbsp;→&nbsp;F rating is Kokoro's estimate of voice
-                  training data and might not reflect voice quality.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div class="field">
-            <label for="speed">RATE <span id="speed-val" class="mono-val">1.0×</span></label>
-            <input id="speed" type="range" min="0.5" max="2" step="0.1" value="1" />
-          </div>
-        </section>
-
-        <section class="transport">
-          <button id="generate" class="transport-btn" type="button">
-            <span class="reel" aria-hidden="true"></span>
-            <span class="btn-label" id="generate-label">Generate</span>
-          </button>
-          <button id="cancel" class="ghost-btn hidden" type="button">Cancel</button>
-          <button id="save" class="save-btn" type="button" disabled>
-            <span class="save-glyph" aria-hidden="true">▼</span>
-            <span id="save-label">Save</span>
-          </button>
-        </section>
-
-        <section class="gen-progress" id="gen-progress" aria-live="polite">
-          <div class="progress-head">
-            <span id="gen-status">Idle</span>
-            <span id="gen-percent" class="mono-val"></span>
-          </div>
-          <div
-            class="bar"
-            id="gen-bar"
-            role="progressbar"
-            aria-label="Generation progress"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow="0"
-          >
-            <div class="bar-fill" id="gen-fill"></div>
-            <div class="bar-leds" aria-hidden="true"></div>
-          </div>
-        </section>
-
-        <section class="player" id="player">
-          <canvas
-            id="waveform"
-            class="waveform"
-            width="1200"
-            height="200"
-            role="slider"
-            tabindex="0"
-            aria-label="Playback position. Use arrow keys to seek."
-            aria-valuemin="0"
-            aria-valuemax="0"
-            aria-valuenow="0"
-            aria-valuetext="No audio"
-          ></canvas>
-          <div class="player-foot">
-            <span id="time-current" class="mono-val">0:00</span>
-            <span id="player-msg" class="player-msg">No audio yet</span>
-            <span id="time-total" class="mono-val">0:00</span>
-          </div>
-        </section>
-
-        <p class="status-line" id="status" role="status" aria-live="polite"></p>
-      </main>
-
-      <footer class="colophon">
-        <span>Kokoro&#8209;82M via Transformers.js</span>
-        <span class="dot">·</span>
-        <span>WebGPU / WASM</span>
-        <span class="dot">·</span>
-        <span>your text &amp; audio stay in the browser; model &amp; fonts load once from CDNs</span>
-      </footer>
-    </div>
-
-    <script type="module" src="/src/main.js"></script>
+    <a href="#main" class="skip-link">Skip to content</a>
+    <div id="app"><p class="loading">正在打开学习资料库…</p></div>
+    <dialog id="editor" aria-label="Material and vocabulary editor"></dialog>
+    <div
+      id="notice"
+      class="toast"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+    <section
+      id="generation-panel"
+      class="generation-panel"
+      aria-label="Speech generation progress"
+      hidden
+    >
+      <div>
+        <strong id="generation-message" role="status"
+          >Loading speech engine…</strong
+        ><button id="cancel-generation" type="button">Cancel</button>
+      </div>
+      <progress id="generation-progress" max="100" value="0"></progress>
+    </section>
+    <div id="quick-player" class="quick-player"></div>
+    <input
+      id="upload-audio"
+      type="file"
+      accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.webm"
+      hidden
+    />
+    <script type="module" src="./src/studio.js"></script>
   </body>
 </html>
